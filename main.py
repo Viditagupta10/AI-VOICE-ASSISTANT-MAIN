@@ -7,6 +7,7 @@ import requests
 from openai import OpenAI
 from gtts import gTTS
 import pygame
+from urllib.parse import quote
 
 # pip install pocketsphinx
 
@@ -19,24 +20,33 @@ def speak_old(text):
     engine.runAndWait()
 
 def speak(text):
-    tts = gTTS(text)
-    tts.save('temp.mp3') 
+    try:
+        tts = gTTS(text)
+        tts.save('temp.mp3')
+        if not os.path.exists('temp.mp3'):
+            raise RuntimeError("Google TTS did not create temp.mp3")
 
-    # Initialize Pygame mixer
-    pygame.mixer.init()
+        pygame.mixer.init()
+        pygame.mixer.music.load('temp.mp3')
+        pygame.mixer.music.play()
 
-    # Load the MP3 file
-    pygame.mixer.music.load('temp.mp3')
-
-    # Play the MP3 file
-    pygame.mixer.music.play()
-
-    # Keep the program running until the music stops playing
-    while pygame.mixer.music.get_busy():
-        pygame.time.Clock().tick(10)
-    
-    pygame.mixer.music.unload()
-    os.remove("temp.mp3") 
+        while pygame.mixer.music.get_busy():
+            pygame.time.Clock().tick(10)
+    except Exception as error:
+        print(f"TTS error; {error}")
+        speak_old(text)
+    finally:
+        if os.path.exists('temp.mp3'):
+            try:
+                if pygame.mixer.get_init():
+                    pygame.mixer.music.stop()
+                    pygame.mixer.music.unload()
+            except pygame.error:
+                pass
+            try:
+                os.remove('temp.mp3')
+            except PermissionError:
+                print("TTS cleanup skipped because temp.mp3 is still in use")
 
 def aiProcess(command):
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY", "YOUR_OPENAI_API_KEY"))
@@ -52,20 +62,30 @@ def aiProcess(command):
     return completion.choices[0].message.content
 
 def processCommand(c):
-    if "open google" in c.lower():
+    command = c.lower()
+    if "youtube" in command and "search" in command:
+        search_term = c[command.find("search") + len("search"):].strip()
+        if search_term.lower().startswith("for "):
+            search_term = search_term[4:].strip()
+        if search_term.lower().endswith(" on youtube"):
+            search_term = search_term[:-11].strip()
+        webbrowser.open_new_tab(
+            f"https://www.youtube.com/results?search_query={quote(search_term)}"
+        )
+    elif "open google" in command:
         webbrowser.open("https://google.com")
-    elif "open facebook" in c.lower():
+    elif "open facebook" in command:
         webbrowser.open("https://facebook.com")
-    elif "open youtube" in c.lower():
+    elif "open youtube" in command:
         webbrowser.open("https://youtube.com")
-    elif "open linkedin" in c.lower():
+    elif "open linkedin" in command:
         webbrowser.open("https://linkedin.com")
-    elif c.lower().startswith("play"):
-        song = c.lower().split(" ")[1]
+    elif command.startswith("play"):
+        song = command.split(" ")[1]
         link = musicLibrary.music[song]
         webbrowser.open(link)
 
-    elif "news" in c.lower():
+    elif "news" in command:
         r = requests.get(f"https://newsapi.org/v2/top-headlines?country=in&apiKey={newsapi}")
         if r.status_code == 200:
             # Parse the JSON response
@@ -98,17 +118,21 @@ if __name__ == "__main__":
         try:
             with sr.Microphone() as source:
                 print("Listening...")
-                audio = r.listen(source, timeout=2, phrase_time_limit=1)
+                audio = r.listen(source, timeout=5, phrase_time_limit=3)
             word = r.recognize_google(audio)
-            if(word.lower() == "jarvis"):
+            print(f"Heard: {word}")
+            if "jarvis" in word.lower():
                 speak("Ya")
-                # Listen for command
-                with sr.Microphone() as source:
-                    print("Jarvis Active...")
-                    audio = r.listen(source)
-                    command = r.recognize_google(audio)
+                command = word[word.lower().find("jarvis") + len("jarvis"):].strip()
+                if not command:
+                    # Listen for a command when it was not included with the wake word.
+                    with sr.Microphone() as source:
+                        print("Jarvis Active...")
+                        audio = r.listen(source, timeout=5, phrase_time_limit=20)
+                        command = r.recognize_google(audio)
+                print(f"Command: {command}")
 
-                    processCommand(command)
+                processCommand(command)
 
 
         except Exception as e:
